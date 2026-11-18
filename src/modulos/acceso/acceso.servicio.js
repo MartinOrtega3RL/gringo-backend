@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import { Op } from 'sequelize'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { entorno } from '../../config/entorno.js'
@@ -76,7 +78,9 @@ export const iniciarSesion = async ({ nombreUsuario, contrasena, direccionIp }) 
   const token = jwt.sign(
     { idUsuario: usuario.idUsuario, perfil: usuario.perfil.nombre },
     entorno.JWT_SECRETO,
-    { expiresIn: entorno.JWT_VIGENCIA },
+    // jwtid: sin un identificador propio, dos ingresos del mismo usuario dentro
+    // del mismo segundo daban el mismo token y chocaban con uk_sesion_token.
+    { expiresIn: entorno.JWT_VIGENCIA, jwtid: randomUUID() },
   )
 
   await Sesion.create({
@@ -130,7 +134,7 @@ export const cerrarSesion = async (idSesion) => {
 }
 
 /** RF01.3 — el usuario cambia su propia contrasena. */
-export const cambiarContrasenaPropia = async (idUsuario, { contrasenaActual, contrasenaNueva }) => {
+export const cambiarContrasenaPropia = async (idUsuario, { contrasenaActual, contrasenaNueva }, idSesionActual) => {
   const usuario = await Usuario.scope('conCredenciales').findByPk(idUsuario)
   if (!usuario) throw new NoAutenticado()
 
@@ -140,10 +144,12 @@ export const cambiarContrasenaPropia = async (idUsuario, { contrasenaActual, con
   await usuario.update({ contrasenaHash: await cifrarContrasena(contrasenaNueva) })
 
   // Cambiar la contrasena cierra las demas sesiones: si alguien la habia
-  // comprometido, deja de tener acceso en ese mismo momento.
+  // comprometido, deja de tener acceso en ese mismo momento. La de quien la
+  // cambia sigue abierta: la pantalla de "Mi cuenta" lo promete, y sacarlo de
+  // su propia sesion lo obligaria a ingresar de nuevo justo despues de cambiarla.
   await Sesion.update(
     { fechaCierre: new Date(), motivoCierre: 'REVOCADA' },
-    { where: { idUsuario, fechaCierre: null } },
+    { where: { idUsuario, fechaCierre: null, idSesion: { [Op.ne]: idSesionActual } } },
   )
 
   await registrarEnBitacora({

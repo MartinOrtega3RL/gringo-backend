@@ -32,7 +32,7 @@ export const salir = async (peticion, respuesta) => {
 
 export const cambiarContrasena = async (peticion, respuesta) => {
   const datos = esquemaCambio.parse(peticion.body)
-  await cambiarContrasenaPropia(peticion.usuario.idUsuario, datos)
+  await cambiarContrasenaPropia(peticion.usuario.idUsuario, datos, peticion.idSesion)
   return respuesta.status(204).send()
 }
 

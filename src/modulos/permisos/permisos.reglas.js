@@ -4,6 +4,7 @@
 // negocio: el Administrador (el titular) administra usuarios, pero no
 // configura la matriz ni lee la bitacora tecnica (decision del equipo).
 export const MODULO_SOPORTE = 'SOPORTE_SISTEMA'
+export const PERFIL_SOPORTE = 'Soporte'
 
 // Cada perfil protegido conserva el modulo sin el cual nadie podria volver a
 // configurarlo desde adentro: Soporte la matriz, Administrador los usuarios.
@@ -11,6 +12,17 @@ export const PERFILES_PROTEGIDOS = {
   Soporte: MODULO_SOPORTE,
   Administrador: 'ADMIN_SEGURIDAD',
 }
+
+// Los datos del negocio son del titular, no de quien mantiene el sistema:
+// Soporte solo tiene acceso a Administracion y seguridad (para restablecer al
+// Administrador) y a su propio modulo. Como el precio de costo se muestra a
+// quien lee Reportes (RF04.2), tampoco ve costos ni rentabilidad.
+export const MODULOS_VEDADOS = {
+  Soporte: ['CATALOGO_STOCK', 'CLIENTES_PROV', 'VENTAS', 'SERVICIO_TECNICO', 'REPORTES'],
+}
+
+export const moduloVedado = (perfil, codigoModulo) =>
+  (MODULOS_VEDADOS[perfil?.nombre] ?? []).includes(codigoModulo)
 
 export const esPerfilProtegido = (perfil) => Object.hasOwn(PERFILES_PROTEGIDOS, perfil?.nombre ?? '')
 
@@ -102,6 +114,23 @@ export const validarPermisosPerfil = ({ perfil, permisos = [], codigosModulo = [
 
   if (vistos.size !== esperados.size) {
     return { valido: false, motivo: 'Tenés que informar los permisos de todos los módulos del sistema.' }
+  }
+
+  // Soporte es uno solo: si otro perfil recibiera acceso a su módulo, sus
+  // usuarios serían un segundo soporte que el titular no ve.
+  if (perfil?.nombre !== PERFIL_SOPORTE) {
+    const soporte = permisos.find((p) => p.codigoModulo === MODULO_SOPORTE)
+    if (soporte?.lectura || soporte?.escritura) {
+      return { valido: false, motivo: 'El módulo Soporte del sistema es exclusivo del perfil Soporte.' }
+    }
+  }
+
+  const vedado = permisos.find((p) => moduloVedado(perfil, p.codigoModulo) && (p.lectura || p.escritura))
+  if (vedado) {
+    return {
+      valido: false,
+      motivo: `El perfil ${perfil.nombre} no puede tener acceso a ${vedado.codigoModulo}: los datos del negocio son del titular.`,
+    }
   }
 
   if (esPerfilProtegido(perfil)) {

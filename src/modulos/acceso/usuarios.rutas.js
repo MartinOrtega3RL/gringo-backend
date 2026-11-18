@@ -4,8 +4,8 @@ import { autenticar } from '../../http/middlewares/autenticar.js'
 import { autorizar, permisosDelUsuario } from '../../http/middlewares/autorizar.js'
 import { leerPaginacion, responderPaginado } from '../../http/paginacion.js'
 import {
-  listarUsuarios, buscarUsuario, listarPerfiles,
-  registrarUsuario, modificarUsuario, darDeBajaUsuario,
+  listarUsuarios, buscarUsuarioVisible, listarPerfiles,
+  registrarUsuario, modificarUsuario, darDeBajaUsuario, restablecerContrasena,
 } from './usuarios.servicio.js'
 
 // RF02 — administracion de usuarios. Modulo exclusivo del Administrador.
@@ -40,13 +40,13 @@ const permisosDe = (peticion) => permisosDelUsuario(peticion.usuario.idPerfil)
 
 // Antes de /:idUsuario, o Express tomaria "perfiles" como identificador.
 rutasUsuarios.get('/perfiles', leer, async (peticion, respuesta) =>
-  respuesta.json({ datos: await listarPerfiles(await permisosDe(peticion)) }))
+  respuesta.json({ datos: await listarPerfiles() }))
 
 rutasUsuarios.get('/', leer, async (peticion, respuesta) => {
   const paginacion = leerPaginacion(peticion.query)
   const texto = z.string().trim().max(80).optional().parse(peticion.query.texto || undefined)
 
-  const resultado = await listarUsuarios({ texto, limit: paginacion.limit, offset: paginacion.offset })
+  const resultado = await listarUsuarios({ texto, limit: paginacion.limit, offset: paginacion.offset }, await permisosDe(peticion))
   return respuesta.json(responderPaginado(resultado, paginacion))
 })
 
@@ -54,7 +54,7 @@ rutasUsuarios.post('/', escribir, async (peticion, respuesta) =>
   respuesta.status(201).json({ datos: await registrarUsuario(esquemaAlta.parse(peticion.body), await permisosDe(peticion)) }))
 
 rutasUsuarios.get('/:idUsuario', leer, async (peticion, respuesta) =>
-  respuesta.json({ datos: await buscarUsuario(esquemaId.parse(peticion.params.idUsuario)) }))
+  respuesta.json({ datos: await buscarUsuarioVisible(esquemaId.parse(peticion.params.idUsuario), await permisosDe(peticion)) }))
 
 rutasUsuarios.put('/:idUsuario', escribir, async (peticion, respuesta) =>
   respuesta.json({
@@ -69,3 +69,14 @@ rutasUsuarios.delete('/:idUsuario', escribir, async (peticion, respuesta) => {
   await darDeBajaUsuario(esquemaId.parse(peticion.params.idUsuario), peticion.usuario.idUsuario, await permisosDe(peticion))
   return respuesta.status(204).send()
 })
+
+// RF02.2 — contraseña provisoria para quien se olvidó la suya. La respuesta es
+// la única vez que se ve: no se guarda en claro en ningún lado.
+rutasUsuarios.post('/:idUsuario/contrasena', escribir, async (peticion, respuesta) =>
+  respuesta.json({
+    datos: await restablecerContrasena(
+      esquemaId.parse(peticion.params.idUsuario),
+      peticion.usuario.idUsuario,
+      await permisosDe(peticion),
+    ),
+  }))
