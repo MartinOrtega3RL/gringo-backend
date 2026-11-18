@@ -1,62 +1,33 @@
-// Alta del primer usuario Administrador.
+// Alta del primer usuario, con perfil Soporte.
 //
 // Existe por un problema de arranque: para dar de alta usuarios (RF02) hay que
 // estar autenticado, y para autenticarse hace falta un usuario. Se corre una
 // sola vez, con la base ya instalada:
 //
-//   npm run crear-administrador
+//   npm run crear-soporte
+//
+// El primer usuario es de Soporte y no Administrador: solo Soporte configura
+// perfiles y permisos y puede dar el perfil Soporte. Quien instala (el equipo
+// de desarrollo) crea despues, desde el sistema, el usuario Administrador del
+// titular del comercio.
 //
 // La contrasena se pide por entrada estandar y no se muestra al tipearla: si
 // se pasara como argumento quedaria en el historial del shell y en la lista
 // de procesos, visible para cualquiera con acceso a la maquina.
 
 import { createInterface } from 'node:readline/promises'
+import { preguntar, preguntarOculto, Abortar, abortar } from './consola.js'
 import { sequelize } from '../src/config/base-de-datos.js'
 import { Persona, Usuario, Perfil } from '../src/modelos/index.js'
 import { cifrarContrasena } from '../src/modulos/acceso/acceso.servicio.js'
 
-// UNA sola interfaz para toda la tanda de preguntas, y creada recien cuando se
-// va a preguntar.
-//
-// Dos motivos. Cerrar una interfaz cierra process.stdin, asi que si se creara
-// una por pregunta, la segunda leeria una entrada ya terminada: question() no
-// dispara nunca y el proceso se cuelga sin decir nada. Y crearla antes de
-// hablar con la base la deja consumiendo stdin durante las consultas, de modo
-// que lo que llegue en ese rato se descarta sin que nadie lo pida.
-const preguntar = async (lector, consigna) => (await lector.question(consigna)).trim()
-
-// Oculta lo que se tipea sin ocultar la consigna. Se interviene el metodo
-// interno de readline y no process.stdout.write: parchear la salida entera
-// tambien se traga el texto de la pregunta, y el usuario no ve que se le pide.
-// _writeToOutput es API privada de Node, estable desde hace anos; es la forma
-// habitual de enmascarar en readline sin sumar una dependencia por un script
-// que se corre una vez.
-const preguntarOculto = async (lector, consigna) => {
-  const original = lector._writeToOutput
-
-  lector._writeToOutput = (texto) => {
-    if (texto.includes(consigna)) return original.call(lector, texto)
-    // Un asterisco por caracter tipeado; los saltos de linea pasan enteros.
-    return original.call(lector, texto.includes('\n') ? texto : '*')
-  }
-
-  try {
-    return (await lector.question(consigna)).trim()
-  } finally {
-    lector._writeToOutput = original
-    process.stdout.write('\n')
-  }
-}
-
-class Abortar extends Error {}
-const abortar = (mensaje) => { throw new Abortar(mensaje) }
 
 const verificarBaseLista = async () => {
-  const perfil = await Perfil.findOne({ where: { nombre: 'Administrador' } })
-  if (!perfil) abortar('No existe el perfil Administrador. Falta ejecutar gestion_comercial_datos.sql.')
+  const perfil = await Perfil.findOne({ where: { nombre: 'Soporte' } })
+  if (!perfil) abortar('No existe el perfil Soporte. Falta ejecutar gestion_comercial_datos.sql.')
 
   const yaHay = await Usuario.count({ where: { idPerfil: perfil.idPerfil } })
-  if (yaHay > 0) abortar(`Ya hay ${yaHay} administrador(es) dados de alta. Este script se corre una sola vez.`)
+  if (yaHay > 0) abortar(`Ya hay ${yaHay} usuario(s) de soporte dados de alta. Este script se corre una sola vez.`)
 
   return perfil
 }
@@ -65,7 +36,7 @@ const pedirDatos = async () => {
   const lector = createInterface({ input: process.stdin, output: process.stdout })
 
   try {
-    console.log('\nAlta del primer Administrador\n')
+    console.log('\nAlta del primer usuario (perfil Soporte)\n')
 
     const apellidoNombre = await preguntar(lector, 'Apellido y nombre : ')
     if (!apellidoNombre) abortar('El apellido y el nombre son obligatorios.')
@@ -113,7 +84,7 @@ const main = async () => {
 try {
   await main()
 } catch (error) {
-  const mensaje = error instanceof Abortar ? error.message : `No se pudo crear el administrador: ${error.message}`
+  const mensaje = error instanceof Abortar ? error.message : `No se pudo crear el usuario de soporte: ${error.message}`
   console.error(`\n${mensaje}\n`)
   process.exitCode = 1
 } finally {

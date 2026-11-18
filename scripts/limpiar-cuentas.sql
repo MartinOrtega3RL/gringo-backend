@@ -165,7 +165,8 @@ SELECT
 
 
 -- =====================================================================
---  Despues de limpiar, volver a crear el administrador desde el backend:
---    npm run crear-administrador
---  El script rechaza correr si ya existe algun Administrador dado de alta.
+--  Despues de limpiar, volver a crear el usuario de soporte desde el backend:
+--    npm run crear-soporte
+--  El script rechaza correr si ya existe algun usuario de Soporte dado de alta.
+--  El Administrador del comercio se crea despues desde el sistema.
 -- =====================================================================
