@@ -18,11 +18,14 @@ import { DatosInvalidos, NoEncontrado } from '../../errores.js'
 import { registroDe } from '../../registro.js'
 import { CARPETA_COMPROBANTES } from './comprobantes.js'
 import { procesarImagenOcr } from './ocr.js'
+import { guardarAnalisis, verAnalisis, consumirAnalisis } from './analisis-pendientes.js'
 import {
   extraerLineas,
   calcularTotalRecepcion,
   consultaSugerenciaProducto,
   productoSugerible,
+  extraerEncabezado,
+  identificarProveedor,
 } from './recepciones.reglas.js'
 
 const log = registroDe('recepciones')
@@ -219,80 +222,144 @@ export const crearRecepcionManual = async (datos, idUsuario) => {
 }
 
 /**
- * RF10.2 — alta con imagen del comprobante y procesamiento OCR en servidor.
- * Si el motor falla o la foto es mala, la recepcion queda igual con la
- * extraccion en estado ERROR para que el usuario cargue las lineas a mano.
+ * RF10.2 — primer paso de la recepcion con foto: lee el comprobante en el
+ * servidor y devuelve lo que encontro, sin crear nada todavia. La foto ya
+ * subida y el analisis quedan guardados un rato (analisis-pendientes.js) hasta
+ * que la persona confirma y se crea la recepcion.
+ *
+ * Que proveedor emitio el comprobante se decide aca porque la recepcion no puede
+ * existir sin uno: si esta cargado, se propone; si no, se devuelve el nombre y el
+ * CUIT leidos para darlo de alta con un clic, como pasa con los productos.
  */
-export const crearRecepcionOcr = async ({ idProveedor, tipoComprobante, numeroComprobante, fechaComprobante, archivo }, idUsuario) => {
-  let recepcion
+export const analizarComprobante = async (archivo, idUsuario) => {
   try {
-    recepcion = await sequelize.transaction(async (transaction) => {
+    const resultadoOcr = await procesarImagenOcr(archivo.path)
+    const texto = resultadoOcr.ok ? String(resultadoOcr.texto ?? '') : ''
+    const lineasExtraidas = resultadoOcr.ok
+      ? (resultadoOcr.lineas ?? extraerLineas(texto))
+      : []
+
+    const encabezado = extraerEncabezado(texto)
+    const proveedores = await listarProveedoresActivos()
+    const identificado = identificarProveedor(encabezado, texto, proveedores)
+
+    const lineas = []
+    const sugerir = resultadoOcr.ok && (resultadoOcr.confianza ?? 0) >= CONFIANZA_MINIMA_SUGERENCIA
+    for (const linea of lineasExtraidas) {
+      const idProducto = sugerir
+        ? await sugerirProductoFulltext(linea.descripcionOriginal).catch(() => null)
+        : null
+      lineas.push({
+        idProducto,
+        descripcionOriginal: linea.descripcionOriginal,
+        cantidad: linea.cantidad,
+        precioCosto: linea.precioCosto,
+        validado: false,
+      })
+    }
+
+    guardarAnalisis({
+      archivo: archivo.filename,
+      ruta: archivo.path,
+      idUsuario,
+      analisis: { resultadoOcr, lineas },
+    })
+
+    const propuesto = encabezado.nombreProveedor || encabezado.cuits[0]
+    log.info({
+      archivo: archivo.filename,
+      ok: resultadoOcr.ok,
+      confianza: resultadoOcr.confianza,
+      proveedor: identificado?.por ?? null,
+      lineas: lineas.length,
+    }, 'comprobante analizado')
+
+    return {
+      archivo: archivo.filename,
+      ok: resultadoOcr.ok,
+      error: resultadoOcr.error,
+      confianza: resultadoOcr.confianza,
+      encabezado: {
+        tipoComprobante: encabezado.tipoComprobante,
+        numeroComprobante: encabezado.numeroComprobante,
+        fechaComprobante: encabezado.fechaComprobante,
+      },
+      proveedor: identificado
+        ? {
+            idProveedor: identificado.idProveedor,
+            nombre: proveedores.find((p) => p.idProveedor === identificado.idProveedor).nombre,
+            por: identificado.por,
+          }
+        : null,
+      proveedorPropuesto: !identificado && propuesto
+        ? { nombre: encabezado.nombreProveedor, cuit: encabezado.cuits[0] ?? null }
+        : null,
+      cantidadLineas: lineas.length,
+    }
+  } catch (error) {
+    await unlink(archivo.path).catch(() => {})
+    throw error
+  }
+}
+
+/**
+ * RF10.2 — segundo paso: crea la recepcion con el analisis de la foto y los datos
+ * que la persona confirmo o corrigio (proveedor, tipo, numero y fecha). Si el
+ * motor fallo o la foto era mala, la recepcion queda igual con la extraccion en
+ * estado ERROR para que se carguen las lineas a mano.
+ *
+ * Si algo falla (por ejemplo, el comprobante ya estaba cargado) el analisis se
+ * conserva: se corrige el dato y se vuelve a intentar sin subir la foto de nuevo.
+ */
+export const crearRecepcionOcr = async (
+  { archivo, idProveedor, tipoComprobante, numeroComprobante, fechaComprobante },
+  idUsuario,
+) => {
+  const { resultadoOcr, lineas } = verAnalisis(archivo, idUsuario)
+
+  let idRecepcion
+  try {
+    idRecepcion = await sequelize.transaction(async (transaction) => {
       await verificarProveedor(idProveedor, transaction)
 
-      return RecepcionMercaderia.create({
+      const recepcion = await RecepcionMercaderia.create({
         idProveedor,
         idUsuario,
         tipoComprobante,
         numeroComprobante: numeroComprobante || null,
         fechaComprobante: fechaComprobante || null,
         origenCarga: 'OCR',
-        imagenComprobante: archivo.filename,
+        imagenComprobante: archivo,
         estado: 'PENDIENTE_VALIDACION',
-        montoTotal: 0,
+        montoTotal: calcularTotalRecepcion(lineas),
       }, { transaction })
+
+      await OcrExtraccion.create({
+        idRecepcion: recepcion.idRecepcion,
+        motorOcr: resultadoOcr.motor,
+        textoExtraido: resultadoOcr.texto,
+        confianzaPromedio: resultadoOcr.confianza,
+        estado: resultadoOcr.ok ? 'PROCESADO' : 'ERROR',
+        mensajeError: resultadoOcr.error,
+      }, { transaction })
+
+      if (lineas.length > 0) {
+        await DetalleRecepcion.bulkCreate(
+          lineas.map((linea) => ({ ...linea, idRecepcion: recepcion.idRecepcion })),
+          { transaction },
+        )
+      }
+
+      return recepcion.idRecepcion
     })
   } catch (error) {
-    await unlink(archivo.path).catch(() => {})
     manejarDuplicadoComprobante(error)
   }
 
-  // El OCR corre fuera de la transaccion para no retener bloqueos en MySQL
-  // mientras procesa la imagen.
-  const resultadoOcr = await procesarImagenOcr(archivo.path)
-  const lineasExtraidas = resultadoOcr.ok
-    ? (resultadoOcr.lineas ?? extraerLineas(resultadoOcr.texto))
-    : []
+  consumirAnalisis(archivo)
+  log.info({ idRecepcion, confianza: resultadoOcr.confianza, lineas: lineas.length }, 'recepcion OCR creada')
 
-  const lineasConSugerencia = []
-  const sugerir = resultadoOcr.ok && (resultadoOcr.confianza ?? 0) >= CONFIANZA_MINIMA_SUGERENCIA
-  for (const linea of lineasExtraidas) {
-    const idProducto = sugerir
-      ? await sugerirProductoFulltext(linea.descripcionOriginal).catch(() => null)
-      : null
-    lineasConSugerencia.push({
-      idRecepcion: recepcion.idRecepcion,
-      idProducto,
-      descripcionOriginal: linea.descripcionOriginal,
-      cantidad: linea.cantidad,
-      precioCosto: linea.precioCosto,
-      validado: false,
-    })
-  }
-
-  await sequelize.transaction(async (transaction) => {
-    await OcrExtraccion.create({
-      idRecepcion: recepcion.idRecepcion,
-      motorOcr: resultadoOcr.motor,
-      textoExtraido: resultadoOcr.texto,
-      confianzaPromedio: resultadoOcr.confianza,
-      estado: resultadoOcr.ok ? 'PROCESADO' : 'ERROR',
-      mensajeError: resultadoOcr.error,
-    }, { transaction })
-
-    if (lineasConSugerencia.length > 0) {
-      await DetalleRecepcion.bulkCreate(lineasConSugerencia, { transaction })
-      await recepcion.update({ montoTotal: calcularTotalRecepcion(lineasConSugerencia) }, { transaction })
-    }
-  })
-
-  log.info({
-    idRecepcion: recepcion.idRecepcion,
-    ok: resultadoOcr.ok,
-    confianza: resultadoOcr.confianza,
-    lineas: lineasConSugerencia.length,
-  }, 'recepcion OCR procesada')
-
-  return buscarRecepcion(recepcion.idRecepcion)
+  return buscarRecepcion(idRecepcion)
 }
 
 export const listarRecepciones = async ({ estado, idProveedor, desde, hasta, limit, offset }) => {

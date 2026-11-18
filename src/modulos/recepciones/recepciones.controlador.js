@@ -1,9 +1,9 @@
-import { unlink } from 'node:fs/promises'
 import { z } from 'zod'
 import { leerPaginacion, responderPaginado } from '../../http/paginacion.js'
 import { DatosInvalidos } from '../../errores.js'
 import {
   crearRecepcionManual,
+  analizarComprobante,
   crearRecepcionOcr,
   listarRecepciones,
   listarProveedoresActivos,
@@ -35,7 +35,10 @@ const esquemaManual = z.object({
   })).min(1, 'La recepción necesita al menos una línea.').max(200),
 })
 
-const esquemaOcrCampos = z.object({
+// Lo que la persona confirmo despues de ver lo que leyo el OCR. `archivo` es el
+// nombre con el que quedo la foto en el analisis; no viaja la imagen de nuevo.
+const esquemaOcrCreacion = z.object({
+  archivo: z.string().trim().min(1, 'Falta la foto analizada.').max(80),
   idProveedor: id,
   tipoComprobante: tipoComprobante.default('FACTURA'),
   numeroComprobante: z.string().trim().max(40).nullish().transform((v) => v || null),
@@ -80,20 +83,17 @@ export const crearManual = async (peticion, respuesta) => {
   return respuesta.status(201).json({ datos: recepcion })
 }
 
-export const crearOcr = async (peticion, respuesta) => {
-  let campos
-  try {
-    if (!peticion.file) throw new DatosInvalidos('Subí la imagen del comprobante (JPG o PNG).')
-    campos = esquemaOcrCampos.parse(peticion.body)
-  } catch (error) {
-    if (peticion.file) await unlink(peticion.file.path).catch(() => {})
-    throw error
-  }
+// RF10.2 — paso 1: sube la foto y devuelve lo que leyo el OCR. No crea la recepcion.
+export const analizarOcr = async (peticion, respuesta) => {
+  if (!peticion.file) throw new DatosInvalidos('Subí la imagen del comprobante (JPG o PNG).')
+  const analisis = await analizarComprobante(peticion.file, peticion.usuario.idUsuario)
+  return respuesta.json({ datos: analisis })
+}
 
-  const recepcion = await crearRecepcionOcr(
-    { ...campos, archivo: peticion.file },
-    peticion.usuario.idUsuario,
-  )
+// RF10.2 — paso 2: crea la recepcion con lo que se confirmo.
+export const crearOcr = async (peticion, respuesta) => {
+  const campos = esquemaOcrCreacion.parse(peticion.body)
+  const recepcion = await crearRecepcionOcr(campos, peticion.usuario.idUsuario)
   return respuesta.status(201).json({ datos: recepcion })
 }
 

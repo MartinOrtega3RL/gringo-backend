@@ -8,6 +8,7 @@ import {
   detalle,
   imagen,
   crearManual,
+  analizarOcr,
   crearOcr,
   guardarLineas,
   confirmar,
@@ -24,7 +25,8 @@ const escribir = autorizar('CATALOGO_STOCK', 'escritura')
 rutasRecepciones.get('/', leer, listar)
 rutasRecepciones.get('/proveedores', leer, proveedores)
 rutasRecepciones.post('/', escribir, crearManual)
-rutasRecepciones.post('/ocr', escribir, recibirComprobante, crearOcr)
+rutasRecepciones.post('/ocr/analizar', escribir, recibirComprobante, analizarOcr)
+rutasRecepciones.post('/ocr', escribir, crearOcr)
 rutasRecepciones.get('/:id', leer, detalle)
 rutasRecepciones.get('/:id/imagen', leer, imagen)
 rutasRecepciones.put('/:id/lineas', escribir, guardarLineas)

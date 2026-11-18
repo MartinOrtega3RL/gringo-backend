@@ -301,3 +301,209 @@ export const productoSugerible = (descripcionOcr, { denominacion, marca }) => {
   return presentes >= Math.min(2, producto.length) && presentes / producto.length >= 2 / 3
 }
 
+// --- Encabezado del comprobante (RF10.2) -----------------------------------------
+
+const sinAcentos = (texto) => String(texto ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+
+/**
+ * Tipo de comprobante: el primero que aparece entre "factura" y "remito". Un
+ * comprobante con CAE o "autorizado por AFIP" es una factura aunque el OCR no
+ * haya leido la palabra. "Recibo", "presupuesto" y "nota" quedan como OTRO. Sin
+ * ninguna de esas senales no se decide: es mejor dejar el valor por defecto que
+ * inventarlo.
+ */
+const leerTipo = (texto) => {
+  const plano = sinAcentos(texto).toLowerCase()
+  const factura = plano.search(/\bfactura\b/)
+  const remito = plano.search(/\bremito\b/)
+  if (factura >= 0 && (remito < 0 || factura < remito)) return 'FACTURA'
+  if (remito >= 0) return 'REMITO'
+  if (/\bcae\b|autorizado por afip/.test(plano)) return 'FACTURA'
+  if (/\b(?:recibo|presupuesto|nota de)\b/.test(plano)) return 'OTRO'
+  return null
+}
+
+/**
+ * Numero de comprobante argentino: punto de venta de 4 o 5 digitos, guion y
+ * numero de 6 a 8 ("0003-00024567"). El "N°" suele salir como "N*e" o "N*",
+ * asi que no se depende de la etiqueta: se busca el patron.
+ */
+const leerNumero = (texto) => {
+  const m = String(texto).match(/(?<![\d-])(\d{4,5})\s?[-–]\s?(\d{6,8})(?![\d-])/)
+  return m ? `${m[1]}-${m[2]}` : null
+}
+
+const FECHA = /(?<!\d)(\d{1,2})\s?[/\-.]\s?(\d{1,2})\s?[/\-.]\s?(\d{4}|\d{2})(?!\d)/g
+
+const aFechaIso = (dia, mes, anio, hoy) => {
+  const d = Number(dia)
+  const m = Number(mes)
+  let a = Number(anio)
+  if (a < 100) a += 2000
+  const fecha = new Date(a, m - 1, d)
+  const valida = fecha.getFullYear() === a && fecha.getMonth() === m - 1 && fecha.getDate() === d
+  // Un comprobante no es del futuro ni de antes del 2000: si el OCR leyo cualquier
+  // otro numero, se descarta en vez de cargar una fecha absurda.
+  if (!valida || a < 2000 || fecha > hoy) return null
+  return `${a}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+}
+
+/** La fecha que sigue a "Fecha:"; si no hay etiqueta legible, la primera valida. */
+const leerFecha = (texto, hoy) => {
+  const lineas = String(texto).split(/\r?\n/)
+  const conEtiqueta = lineas.filter((linea) => /fecha|emisi[oó]n/i.test(linea))
+  for (const linea of [...conEtiqueta, ...lineas]) {
+    for (const m of linea.matchAll(FECHA)) {
+      const iso = aFechaIso(m[1], m[2], m[3], hoy)
+      if (iso) return iso
+    }
+  }
+  return null
+}
+
+const soloDigitos = (valor) => String(valor ?? '').replace(/\D/g, '')
+
+/** CUIT con guiones ("30-71234567-8"), tal como lo imprime la factura. */
+const leerCuits = (texto) => {
+  const cuits = []
+  for (const m of String(texto).matchAll(/(?<!\d)(\d{2})\s?[-–]\s?(\d{8})\s?[-–]\s?(\d)(?!\d)/g)) {
+    const cuit = `${m[1]}${m[2]}${m[3]}`
+    if (!cuits.includes(cuit)) cuits.push(cuit)
+  }
+  return cuits
+}
+
+const SUFIJO_SOCIETARIO = /\b(?:s\.?\s?r\.?\s?l\.?|s\.?\s?a\.?s?\.?)(?=\s|$)/i
+const NO_ES_NOMBRE = /cuit|cuil|fecha|cliente|direcci[oó]n|domicilio|localidad|dni|iva|tel\b|nro|n[°º*]|cant|descripci|factura|remito|original|duplicado|hora|se[ñn]or|gracias|compra|total/i
+// Lo que dice el membrete debajo del nombre: rubro y productos, no la razon social.
+const RUBRO = new Set([
+  'repuestos', 'accesorios', 'telefonia', 'celular', 'celulares', 'fundas', 'cargadores', 'auriculares',
+  'baterias', 'protectores', 'insumos', 'mercaderia', 'detalle', 'venta', 'mayorista', 'minorista',
+])
+
+const limpiarRenglon = (cruda) => {
+  const renglon = cruda
+    .replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ0-9.&\s-]/g, ' ')
+    .replace(/\bFACTURA\b.*$/i, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  // Fuera las sobras de uno o dos caracteres del borde ("DJ", "a"), salvo S.A.
+  const palabras = renglon.split(' ').filter(Boolean)
+  while (palabras.length > 0 && palabras[0].length <= 2 && !/^s\.?a\.?$/i.test(palabras[0])) palabras.shift()
+  // Y las de un caracter del borde derecho.
+  while (palabras.length > 0 && palabras[palabras.length - 1].length === 1) palabras.pop()
+  return palabras.join(' ')
+}
+
+const esNombrePlausible = (texto) => {
+  const letras = (texto.match(/[A-Za-zÁÉÍÓÚÑáéíóúñ]/g) ?? []).length
+  const palabras = sinAcentos(texto).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+  return (
+    texto.length >= 5 && texto.length <= 60 && letras / texto.length >= 0.7 &&
+    !NO_ES_NOMBRE.test(texto) && palabras.some((p) => p.length >= 4 && !RUBRO.has(p))
+  )
+}
+
+/**
+ * El nombre del proveedor es lo primero que imprime el comprobante, pero el OCR
+ * deja basura en los bordes ("DJ", "| ", "a |") y los membretes mezclan el
+ * nombre con el rubro. Solo se propone un nombre cuando hay una senal clara: la
+ * etiqueta "Razon social", una terminacion S.R.L. o S.A., o un renglon entero en
+ * mayusculas. Con menos que eso queda vacio: es mejor que lo escriba la persona
+ * a que se cargue un proveedor con un nombre inventado por el ruido.
+ */
+const leerNombreProveedor = (texto) => {
+  const renglones = String(texto).split(/\r?\n/)
+
+  for (const cruda of renglones) {
+    const m = cruda.match(/raz[oó]n\s+social\s*:?\s*(.+)$/i)
+    const nombre = m ? limpiarRenglon(m[1]) : null
+    if (nombre && esNombrePlausible(nombre)) return nombre
+  }
+
+  const candidatos = renglones.slice(0, 10).map(limpiarRenglon).filter(esNombrePlausible)
+  return (
+    candidatos.find((c) => SUFIJO_SOCIETARIO.test(c)) ??
+    candidatos.find((c) => c === c.toUpperCase() && c.includes(' ')) ??
+    null
+  )
+}
+
+/**
+ * RF10.2 — lo que la foto dice del comprobante: tipo, numero, fecha y quien lo
+ * emite. Todo es una propuesta para que la persona revise: cada dato que no se
+ * pudo leer con seguridad queda en null, no se adivina.
+ *
+ * @param {string} texto  el texto que devolvio el OCR
+ * @param {Date} [hoy]    para descartar fechas del futuro
+ */
+export const extraerEncabezado = (texto, hoy = new Date()) => {
+  const base = String(texto ?? '')
+  return {
+    tipoComprobante: leerTipo(base),
+    numeroComprobante: leerNumero(base),
+    fechaComprobante: leerFecha(base, hoy),
+    cuits: leerCuits(base),
+    nombreProveedor: leerNombreProveedor(base),
+  }
+}
+
+// --- Proveedor ---------------------------------------------------------------------
+
+// Palabras que no distinguen a un proveedor de otro.
+const NOMBRE_GENERICO = new Set([
+  'sa', 'srl', 'sas', 'sociedad', 'anonima', 'responsabilidad', 'limitada', 'distribuidora', 'comercial',
+  'importadora', 'mayorista', 'hermanos', 'hnos', 'de', 'del', 'la', 'el', 'los', 'las', 'y', 'e', 'cia',
+  'repuestos', 'accesorios', 'telefonia', 'celular', 'celulares',
+])
+
+const distancia = (a, b) => {
+  const fila = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    let anterior = fila[0]
+    fila[0] = i
+    for (let j = 1; j <= b.length; j++) {
+      const guardado = fila[j]
+      fila[j] = Math.min(fila[j] + 1, fila[j - 1] + 1, anterior + (a[i - 1] === b[j - 1] ? 0 : 1))
+      anterior = guardado
+    }
+  }
+  return fila[b.length]
+}
+
+// "TecnoFx" es "TecnoFix" con una letra comida por el OCR; "TecnoCel" es otro
+// proveedor aunque empiece igual. Se tolera un error cada cinco letras.
+const parecidas = (a, b) =>
+  a === b || (Math.min(a.length, b.length) >= 5 && distancia(a, b) <= Math.floor(Math.max(a.length, b.length) * 0.2))
+
+const palabrasDistintivas = (nombre) =>
+  sinAcentos(nombre).toLowerCase().split(/[^a-z0-9]+/).filter((p) => p.length >= 3 && !NOMBRE_GENERICO.has(p))
+
+/**
+ * RF10.2 — busca entre los proveedores cargados al que emitio el comprobante.
+ * Primero por CUIT, que no se confunde con nadie; si el OCR no lo leyo, por
+ * nombre, exigiendo todas las palabras que lo distinguen. Si dos proveedores
+ * encajan, no elige ninguno: equivocarse manda el stock y el costo a quien no es.
+ *
+ * @param {{cuits: string[]}} encabezado
+ * @param {string} texto
+ * @param {{idProveedor: number, nombre: string, cuit: string|null}[]} proveedores
+ * @returns {null | {idProveedor: number, por: 'CUIT'|'NOMBRE'}}
+ */
+export const identificarProveedor = (encabezado, texto, proveedores) => {
+  const porCuit = proveedores.filter((p) => {
+    const cuit = soloDigitos(p.cuit)
+    return cuit.length === 11 && encabezado.cuits.includes(cuit)
+  })
+  if (porCuit.length === 1) return { idProveedor: porCuit[0].idProveedor, por: 'CUIT' }
+  if (porCuit.length > 1) return null
+
+  const palabrasDelTexto = sinAcentos(String(texto).split(/\r?\n/).slice(0, 12).join(' '))
+    .toLowerCase().split(/[^a-z0-9]+/).filter((p) => p.length >= 3)
+
+  const porNombre = proveedores.filter((p) => {
+    const distintivas = palabrasDistintivas(p.nombre)
+    return distintivas.length > 0 && distintivas.every((d) => palabrasDelTexto.some((w) => parecidas(d, w)))
+  })
+  return porNombre.length === 1 ? { idProveedor: porNombre[0].idProveedor, por: 'NOMBRE' } : null
+}
