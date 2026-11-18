@@ -9,7 +9,7 @@ La interfaz está en el repositorio [gringo-frontend](https://github.com/MartinO
 
 ## Requisitos
 
-- Node.js 20.11 o superior
+- Node.js 26 (LTS). El motor de lectura de comprobantes (tesseract.js) no arranca en versiones anteriores, como la 22 que trae Ubuntu
 - MySQL 8.0.16 o superior (motor InnoDB)
 
 ## Instalación
