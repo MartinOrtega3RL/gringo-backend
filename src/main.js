@@ -43,7 +43,10 @@ const armarAplicacion = () => {
 
   const aplicacion = express()
 
-  aplicacion.set('trust proxy', true)
+  // Solo se cree la IP que informa un proxy de la propia maquina (Nginx en
+  // produccion, Vite en desarrollo). Con 'true' cualquiera podria mandar un
+  // X-Forwarded-For inventado y falsear la IP que queda en la bitacora.
+  aplicacion.set('trust proxy', 'loopback')
   aplicacion.use(registrarPeticiones)
   aplicacion.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }))
   aplicacion.use(cors({ origin: entorno.ORIGEN_FRONTEND, credentials: true }))
@@ -99,7 +102,7 @@ const arrancar = async () => {
     process.exit(1)
   }
 
-  armarAplicacion().listen(entorno.PORT, () => {
+  armarAplicacion().listen(entorno.PORT, entorno.HOST, () => {
     log.info({ puerto: entorno.PORT, nivel: registro.level },
       `servidor escuchando en http://localhost:${entorno.PORT}`)
   })

@@ -39,7 +39,7 @@ export const registrarPeticiones = pinoHttp({
     `${peticion.method} ${peticion.url} ${respuesta.statusCode}`,
 
   // De la peticion solo interesa esto. El cuerpo NO se registra: ahi viajan
-  // contrasenas y datos personales de clientes (Ley 25.326, RNF10).
+  // contrasenas y datos personales de clientes (Ley 25.326).
   serializers: {
     req: (peticion) => ({
       id: peticion.id,

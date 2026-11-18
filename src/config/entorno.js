@@ -12,6 +12,9 @@ const esquema = z.object({
   DB_PASSWORD: z.string(),
 
   PORT: z.coerce.number().int().positive().default(3000),
+  // En produccion, 127.0.0.1: el backend solo atiende a Nginx, que esta en la
+  // misma maquina. Sin valor, escucha en todas las interfaces (desarrollo).
+  HOST: z.string().optional().transform((valor) => valor || undefined),
   ORIGEN_FRONTEND: z.string().url().default('http://localhost:5173'),
 
   JWT_SECRETO: z.string().min(32, 'JWT_SECRETO debe tener al menos 32 caracteres'),
