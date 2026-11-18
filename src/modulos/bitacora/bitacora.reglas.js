@@ -49,6 +49,34 @@ export const limpiarObjeto = (objeto) => {
   return Object.keys(limpio).length > 0 ? limpio : null
 }
 
+// La bitacora registra todo, pero quien la lee es Soporte y los datos del
+// negocio son del titular: costos y montos (rentabilidad, RF04.2) y los datos
+// personales de clientes y proveedores se ocultan a quien no tiene acceso a
+// esos modulos. Lo guardado no se toca.
+const CLAVES_DE_COSTO = new Set(['preciocosto', 'costounitario', 'valorcosto', 'precio_costo', 'costo_unitario'])
+const CLAVES_DE_MONTO = new Set(['montototal', 'recargofinanciacion', 'montopresupuestado', 'recargoaplicado', 'importe'])
+const CLAVES_PERSONALES = new Set(['apellidonombre', 'numerodocumento', 'telefonowhatsapp', 'correo', 'domicilio', 'domicilioentrega'])
+const ENTIDADES_CON_DATOS_PERSONALES = new Set(['cliente', 'proveedor'])
+
+const quitar = (valor, claves) => {
+  if (Array.isArray(valor)) return valor.map((v) => quitar(v, claves))
+  if (valor && typeof valor === 'object') {
+    return Object.fromEntries(
+      Object.entries(valor)
+        .filter(([clave]) => !claves.has(String(clave).toLowerCase()))
+        .map(([clave, interior]) => [clave, quitar(interior, claves)]),
+    )
+  }
+  return valor
+}
+
+/** Costos y montos: se ocultan a quien no tiene acceso a Reportes. */
+export const sinCostos = (valor) => quitar(valor, new Set([...CLAVES_DE_COSTO, ...CLAVES_DE_MONTO]))
+
+/** Datos personales de clientes y proveedores: se ocultan a quien no tiene acceso al modulo. */
+export const sinDatosPersonales = (valor, entidad) =>
+  ENTIDADES_CON_DATOS_PERSONALES.has(String(entidad ?? '').toLowerCase()) ? quitar(valor, CLAVES_PERSONALES) : valor
+
 const iguales = (a, b) => {
   if (a === b) return true
   if (a == null && b == null) return true

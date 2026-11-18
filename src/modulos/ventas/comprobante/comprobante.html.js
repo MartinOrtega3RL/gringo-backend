@@ -1,4 +1,4 @@
-import { aPesos, aCentavos, MODALIDADES_PAGO, resumenCuotas, condicionDePago, textoCuotas } from '../ventas.reglas.js'
+import { aCentavos, MODALIDADES_PAGO, resumenCuotas, condicionDePago, textoCuotas } from '../ventas.reglas.js'
 
 // Implementacion vigente del contrato: comprobante interno no fiscal (S05),
 // en HTML listo para imprimir en HOJA A4, que es la impresora que tiene el
@@ -14,7 +14,9 @@ const escapar = (valor) => String(valor ?? '')
   .replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;')
 
-const pesos = (valor) => aPesos(aCentavos(valor))
+// Con puntos de mil y coma decimal, como se ve en pantalla: $62.000,00.
+const formato = (centavos) => (centavos / 100).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const pesos = (valor) => formato(aCentavos(valor))
 
 const fechaLegible = (fecha) => new Date(fecha).toLocaleString('es-AR', {
   day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
@@ -32,7 +34,7 @@ const tablaPlanCuotas = (cuotas = []) => {
           <td class="cod">Cuota ${escapar(c.numeroCuota)}</td>
           <td>${escapar(soloFechaLegible(c.fechaVencimiento))}</td>
           <td class="n">$${pesos(c.importe)}</td>
-          <td>${c.fechaCobro ? 'Cobrada' : 'Pendiente'}</td>
+          <td class="estado">${c.fechaCobro ? 'Cobrada' : 'Pendiente'}</td>
         </tr>`).join('')
 
   return `
@@ -40,7 +42,7 @@ const tablaPlanCuotas = (cuotas = []) => {
     <table style="margin-top:2mm;">
       <thead>
         <tr>
-          <th>Cuota</th><th>Vencimiento</th><th class="n">Importe</th><th>Estado</th>
+          <th>Cuota</th><th>Vencimiento</th><th class="n">Importe</th><th class="estado">Estado</th>
         </tr>
       </thead>
       <tbody>${filas}
@@ -72,7 +74,7 @@ const filaDetalle = (linea) => `
           <td>${escapar(linea.producto?.denominacion ?? '')}</td>
           <td class="n">${linea.cantidad}</td>
           <td class="n">${pesos(linea.precioUnitario)}</td>
-          <td class="n">${aPesos(aCentavos(linea.precioUnitario) * linea.cantidad)}</td>
+          <td class="n">${formato(aCentavos(linea.precioUnitario) * linea.cantidad)}</td>
         </tr>`
 
 const ESTILO = `
@@ -115,6 +117,7 @@ const ESTILO = `
       letter-spacing: 0.14em; padding: 0 0 2mm; border-bottom: 1.5pt solid #17181a;
     }
     thead th.n { text-align: right; }
+    .estado { padding-left: 10mm; }
     tbody td { padding: 2.2mm 0; border-bottom: 0.3pt solid #c9c7bf; vertical-align: top; }
 
     .totales { margin-top: 5mm; margin-left: auto; width: 78mm; }
@@ -184,9 +187,9 @@ const plantilla = (venta) => {
 
     <table class="totales">
       <tbody>
-        <tr><td>Subtotal</td><td class="n">${aPesos(totalCentavos)}</td></tr>
-        ${recargoCentavos > 0 ? `<tr><td>Recargo por financiacion</td><td class="n">${aPesos(recargoCentavos)}</td></tr>` : ''}
-        <tr class="total"><td>Total</td><td class="n">$${aPesos(totalCentavos + recargoCentavos)}</td></tr>
+        <tr><td>Subtotal</td><td class="n">${formato(totalCentavos)}</td></tr>
+        ${recargoCentavos > 0 ? `<tr><td>Recargo por financiacion</td><td class="n">${formato(recargoCentavos)}</td></tr>` : ''}
+        <tr class="total"><td>Total</td><td class="n">$${formato(totalCentavos + recargoCentavos)}</td></tr>
       </tbody>
     </table>
 
@@ -194,7 +197,11 @@ const plantilla = (venta) => {
 
     <div class="pie">
       <span>
-        ${escapar(condicionDePago({ ...venta, medioPago: venta.pago?.medioPago?.nombre }))}
+        ${escapar(condicionDePago({
+          modalidadPago: venta.modalidadPago,
+          cantidadCuotas: venta.cantidadCuotas,
+          medioPago: venta.pago?.medioPago?.nombre,
+        }))}
         <br>
         ${venta.modalidadEntrega === 'ENVIO_DOMICILIO'
           ? `Envio a ${escapar(venta.domicilioEntrega)}`

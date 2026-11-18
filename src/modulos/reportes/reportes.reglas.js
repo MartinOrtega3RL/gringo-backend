@@ -4,7 +4,7 @@
 
 import { puedeVerCosto } from '../catalogo/catalogo.reglas.js'
 import { aCentavos, aPesos, MODALIDADES_PAGO } from '../ventas/ventas.reglas.js'
-import { fechaIso } from '../servicio/servicio.reglas.js'
+import { fechaIso, liquidar } from '../servicio/servicio.reglas.js'
 
 /** Rango predeterminado: del primer dia del mes en curso hasta hoy (hora local). */
 export const rangoMesEnCurso = (hoy = new Date()) => ({
@@ -144,6 +144,23 @@ export const valorizacionVisible = (filas = [], permisos) => {
 /**
  * RF28 — arma el reporte de servicio tecnico del periodo.
  */
+/**
+ * RF28 — lo que vale una orden que todavia esta en el taller. `monto_total`
+ * solo se escribe al entregar, asi que la vista v_ordenes_no_retiradas lo trae
+ * en cero justo para las ordenes que se estan por cobrar. Se calcula igual que
+ * la ficha: presupuesto mas repuestos, y el recargo por demora sobre ese valor.
+ */
+export const valuarNoRetirada = ({ presupuesto = 0, repuestos = 0, porcentajeRecargo }) => {
+  const { reparacion, recargo } = liquidar({
+    montoPresupuestado: presupuesto,
+    repuestos: [{ precioUnitario: repuestos, cantidad: 1 }],
+    huboReparacion: true,
+    noRetirada: true,
+    porcentajeRecargo,
+  })
+  return { montoTotal: aPesos(reparacion), recargoSugerido: aPesos(recargo) }
+}
+
 export const resumirServicioPeriodo = ({ porEstado = [], totales = {}, noRetiradas = [] }) => ({
   porEstado: porEstado.map((fila) => ({
     codigo: String(fila.codigo),

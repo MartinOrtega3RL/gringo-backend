@@ -6,7 +6,9 @@ import {
   resumirVentasPeriodo,
   valorizacionVisible,
   resumirServicioPeriodo,
+  valuarNoRetirada,
 } from './reportes.reglas.js'
+import { reglasDeNegocio } from '../servicio/ordenes.nucleo.js'
 
 const limitesDelPeriodo = ({ desde, hasta }) => {
   const { valido, motivo } = rangoValido({ desde, hasta })
@@ -184,18 +186,27 @@ export const reporteServicio = async ({ desde, hasta }) => {
        AND fecha_ingreso <= :hasta
   `, { replacements })
 
-  const [noRetiradas] = await sequelize.query(`
-    SELECT id_orden AS idOrden,
-           numero_orden AS numeroOrden,
-           cliente,
-           telefono_whatsapp AS telefonoWhatsapp,
-           fecha_notificacion AS fechaNotificacion,
-           dias_desde_notificacion AS diasDesdeNotificacion,
-           monto_total AS montoTotal,
-           recargo_sugerido AS recargoSugerido
-      FROM v_ordenes_no_retiradas
-     ORDER BY dias_desde_notificacion DESC, numero_orden ASC
+  const [enVista] = await sequelize.query(`
+    SELECT v.id_orden AS idOrden,
+           v.numero_orden AS numeroOrden,
+           v.cliente,
+           v.telefono_whatsapp AS telefonoWhatsapp,
+           v.fecha_notificacion AS fechaNotificacion,
+           v.dias_desde_notificacion AS diasDesdeNotificacion,
+           COALESCE(o.monto_presupuestado, 0) AS presupuesto,
+           COALESCE((SELECT SUM(r.cantidad * r.precio_unitario)
+                       FROM repuesto_utilizado r
+                      WHERE r.id_orden = v.id_orden), 0) AS repuestos
+      FROM v_ordenes_no_retiradas v
+      JOIN orden_servicio o ON o.id_orden = v.id_orden
+     ORDER BY v.dias_desde_notificacion DESC, v.numero_orden ASC
   `)
+
+  const { recargoPct } = await reglasDeNegocio()
+  const noRetiradas = enVista.map((fila) => ({
+    ...fila,
+    ...valuarNoRetirada({ presupuesto: fila.presupuesto, repuestos: fila.repuestos, porcentajeRecargo: recargoPct }),
+  }))
 
   return {
     periodo: { desde, hasta },

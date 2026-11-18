@@ -48,17 +48,38 @@ const RELACIONES = [
 const MATCH_FULLTEXT =
   'MATCH (`Producto`.`denominacion`, `Producto`.`descripcion`) AGAINST (:texto IN BOOLEAN MODE)'
 
-const armarFiltro = ({ texto, idCategoria, idMarca, soloBajoMinimo }) => {
+// Los % y _ que escriba el usuario son letras, no comodines.
+const sinComodines = (palabra) => palabra.replace(/[\\%_]/g, '\\$&')
+
+// La palabra corta se busca por su comienzo, como el comodin final del MATCH:
+// al principio del texto o despues de un espacio. "ui" no tiene que aparecer
+// dentro de "equipo".
+const empiezaCon = (columna, palabra) => [
+  { [columna]: { [Op.like]: `${sinComodines(palabra)}%` } },
+  { [columna]: { [Op.like]: `% ${sinComodines(palabra)}%` } },
+]
+
+const armarFiltro = ({ texto, busqueda, idCategoria, idMarca, soloBajoMinimo }) => {
   const filtro = { activo: true }
 
   if (idCategoria) filtro.idCategoria = idCategoria
   if (idMarca) filtro.idMarca = idMarca
   if (soloBajoMinimo) filtro.bajoMinimo = true
 
-  if (texto) {
+  if (busqueda) {
+    // Las palabras largas van por el indice; las cortas, por LIKE sobre lo que
+    // el indice no guarda. Todas tienen que estar (AND), como en el MATCH.
+    const condiciones = []
+    if (busqueda.fulltext) condiciones.push(sequelize.literal(MATCH_FULLTEXT))
+    for (const palabra of busqueda.cortas) {
+      condiciones.push({
+        [Op.or]: [...empiezaCon('denominacion', palabra), ...empiezaCon('descripcion', palabra)],
+      })
+    }
+
     // El codigo interno se compara exacto: al tipearlo entero, el operador
     // espera ese producto y no una lista de parecidos (RF16.2).
-    filtro[Op.or] = [{ codigoInterno: texto }, sequelize.literal(MATCH_FULLTEXT)]
+    filtro[Op.or] = [{ codigoInterno: texto }, { [Op.and]: condiciones }]
   }
 
   return filtro
@@ -69,9 +90,9 @@ export const listarProductos = async ({ texto, idCategoria, idMarca, soloBajoMin
   const busqueda = prepararBusqueda(texto)
 
   const resultado = await Producto.findAndCountAll({
-    where: armarFiltro({ texto: busqueda ? texto : null, idCategoria, idMarca, soloBajoMinimo }),
+    where: armarFiltro({ texto, busqueda, idCategoria, idMarca, soloBajoMinimo }),
     include: RELACIONES,
-    replacements: busqueda ? { texto: busqueda } : undefined,
+    replacements: busqueda?.fulltext ? { texto: busqueda.fulltext } : undefined,
     order: [['denominacion', 'ASC']],
     limit,
     offset,

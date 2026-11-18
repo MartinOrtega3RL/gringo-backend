@@ -22,11 +22,22 @@ export const productoVisible = (producto, permisos) => {
 export const catalogoVisible = (productos, permisos) =>
   productos.map((producto) => productoVisible(producto, permisos))
 
+// El indice FULLTEXT de MySQL no guarda palabras de menos de 3 letras
+// (innodb_ft_min_token_size = 3). En un negocio de celulares son comunes:
+// "13", "S8", "XR", "5G", "XL". Si se exigieran en el MATCH, escribir
+// "iphone 13" no encontraria nada aunque el producto exista.
+export const LARGO_MINIMO_INDICE = 3
+
 /**
- * Prepara el texto para MATCH ... AGAINST en modo booleano. Los operadores
- * (+ - * " ~ < > ( )) se quitan: si el usuario escribe "funda -azul", la
- * consulta no debe interpretarlo como sintaxis.
- * El comodin final habilita la busqueda predictiva de RF16.2.
+ * Prepara el texto de la busqueda. Los operadores (+ - * " ~ < > ( )) se
+ * quitan: si el usuario escribe "funda -azul", la consulta no debe
+ * interpretarlo como sintaxis.
+ *
+ * Devuelve las palabras largas ya armadas para MATCH ... AGAINST en modo
+ * booleano (con el comodin final de RF16.2) y, aparte, las cortas, que el
+ * servicio compara con LIKE porque el indice no las conoce.
+ *
+ * @returns {null | {fulltext: string|null, cortas: string[]}}
  */
 export const prepararBusqueda = (texto) => {
   const limpio = String(texto ?? '')
@@ -36,7 +47,14 @@ export const prepararBusqueda = (texto) => {
     .filter((palabra) => palabra.length > 0)
 
   if (limpio.length === 0) return null
-  return limpio.map((palabra) => `+${palabra}*`).join(' ')
+
+  const largas = limpio.filter((palabra) => palabra.length >= LARGO_MINIMO_INDICE)
+  const cortas = limpio.filter((palabra) => palabra.length < LARGO_MINIMO_INDICE)
+
+  return {
+    fulltext: largas.length > 0 ? largas.map((palabra) => `+${palabra}*`).join(' ') : null,
+    cortas,
+  }
 }
 
 /**
