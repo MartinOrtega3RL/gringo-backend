@@ -1,0 +1,22 @@
+# Dependencias
+node_modules/
+
+# Secretos y configuracion de cada maquina.
+# El .env lleva la contrasena de MySQL y el secreto de los tokens: nunca se versiona.
+# Lo que se versiona es .env.example, con los nombres de las variables y ningun valor real.
+.env
+.env.local
+.env.*.local
+
+# Lo que el sistema escribe mientras corre (fotos de comprobantes, datos del OCR, imagenes de productos)
+almacen/
+comprobantes/
+*.log
+logs/
+
+# Sistema operativo y editores
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
