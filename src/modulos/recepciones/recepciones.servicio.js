@@ -1,6 +1,6 @@
 import { access, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { Op } from 'sequelize'
+import { Op, QueryTypes } from 'sequelize'
 import { sequelize } from '../../config/base-de-datos.js'
 import {
   RecepcionMercaderia,
@@ -25,7 +25,9 @@ import {
   consultaSugerenciaProducto,
   productoSugerible,
   extraerEncabezado,
+  extraerTotalesComprobante,
   identificarProveedor,
+  productoCreadoParaLaRecepcion,
 } from './recepciones.reglas.js'
 
 const log = registroDe('recepciones')
@@ -84,7 +86,10 @@ const formatearRecepcion = (r) => ({
   origenCarga: r.origenCarga,
   tieneImagen: Boolean(r.imagenComprobante),
   estado: r.estado,
+  // Suma de las lineas. El total de la factura (con descuento e IVA) es otro dato:
+  // se lee del pie del comprobante, y solo hay uno si la recepcion vino de una foto.
   montoTotal: Number(r.montoTotal ?? 0),
+  totalesComprobante: extraerTotalesComprobante(r.extraccion?.textoExtraido),
   fechaConfirmacion: r.fechaConfirmacion,
   extraccion: r.extraccion
     ? {
@@ -442,6 +447,8 @@ export const rutaImagenComprobante = async (idRecepcion) => {
 
 /** RF10.3 — edita las lineas mientras la recepcion esta pendiente. */
 export const actualizarLineas = async (idRecepcion, lineas) => {
+  let productosDadosDeBaja = []
+
   await sequelize.transaction(async (transaction) => {
     const recepcion = await RecepcionMercaderia.findByPk(idRecepcion, {
       lock: transaction.LOCK.UPDATE,
@@ -454,6 +461,7 @@ export const actualizarLineas = async (idRecepcion, lineas) => {
 
     await verificarProductosActivos(lineas, transaction)
 
+    const anteriores = await DetalleRecepcion.findAll({ where: { idRecepcion }, attributes: ['idProducto'], transaction })
     await DetalleRecepcion.destroy({ where: { idRecepcion }, transaction })
     if (lineas.length > 0) {
       await DetalleRecepcion.bulkCreate(
@@ -470,9 +478,15 @@ export const actualizarLineas = async (idRecepcion, lineas) => {
     }
 
     await recepcion.update({ montoTotal: calcularTotalRecepcion(lineas) }, { transaction })
+
+    // Lo que se quita de la recepcion no se queda en el catalogo: se da de baja el
+    // producto que se habia creado para esa linea, si ya no lo usa nadie.
+    const siguen = new Set(lineas.map((l) => l.idProducto).filter(Boolean))
+    const quitados = anteriores.map((l) => l.idProducto).filter((idProducto) => idProducto && !siguen.has(idProducto))
+    productosDadosDeBaja = await darDeBajaProductosSobrantes(quitados, recepcion.fechaRegistro, 'se quitó de una recepción', transaction)
   })
 
-  return buscarRecepcion(idRecepcion)
+  return { ...(await buscarRecepcion(idRecepcion)), productosDadosDeBaja }
 }
 
 /** RF10.3 — confirmacion atomica: existencias, costos y bitacora en una transaccion. */
@@ -561,8 +575,14 @@ export const confirmarRecepcion = async (idRecepcion, idUsuario) => {
  * Solo se eliminan las pendientes, que todavia no movieron stock. Las lineas y
  * la extraccion OCR se borran en cascada. La recepcion completa queda en la
  * bitacora, y la foto se conserva en el almacen como respaldo de ese registro.
+ *
+ * Los productos que se dieron de alta solo para esta recepcion y no tienen
+ * historia se dan de baja: si no, quedarian en el catalogo y en el mostrador con
+ * stock cero. Devuelve cuales fueron, para avisarlo.
  */
 export const eliminarRecepcion = async (idRecepcion) => {
+  let productosDadosDeBaja = []
+
   await sequelize.transaction(async (transaction) => {
     const recepcion = await RecepcionMercaderia.findByPk(idRecepcion, {
       lock: transaction.LOCK.UPDATE,
@@ -591,9 +611,49 @@ export const eliminarRecepcion = async (idRecepcion) => {
     }, transaction)
 
     await recepcion.destroy({ transaction })
+
+    const ids = (completa.lineas ?? []).map((l) => l.idProducto).filter(Boolean)
+    productosDadosDeBaja = await darDeBajaProductosSobrantes(ids, completa.fechaRegistro, 'la recepción se eliminó', transaction)
   })
 
-  log.info({ idRecepcion }, 'recepcion pendiente eliminada')
+  log.info({ idRecepcion, productosDadosDeBaja: productosDadosDeBaja.length }, 'recepcion pendiente eliminada')
+  return { productosDadosDeBaja }
+}
+
+// Da de baja, de entre `idsProducto`, los que se crearon solo para esa recepcion y
+// quedaron sin ningun uso. Se corre con las lineas ya actualizadas (o borradas en
+// cascada): si una linea todavia usa el producto, cuenta como uso y se conserva.
+const darDeBajaProductosSobrantes = async (idsProducto, fechaRegistro, motivo, transaction) => {
+  const ids = [...new Set(idsProducto)]
+  if (ids.length === 0) return []
+
+  const candidatos = await sequelize.query(
+    `SELECT p.id_producto AS idProducto, p.denominacion, p.activo, p.stock_actual AS stockActual,
+            p.creado_en AS creadoEn,
+            (SELECT COUNT(*) FROM movimiento_stock x WHERE x.id_producto = p.id_producto) AS movimientos,
+            (SELECT COUNT(*) FROM detalle_venta x WHERE x.id_producto = p.id_producto) AS ventas,
+            (SELECT COUNT(*) FROM pedido_pendiente x WHERE x.id_producto = p.id_producto) AS pedidos,
+            (SELECT COUNT(*) FROM repuesto_utilizado x WHERE x.id_producto = p.id_producto) AS repuestos,
+            (SELECT COUNT(*) FROM detalle_recepcion x WHERE x.id_producto = p.id_producto) AS otrasRecepciones
+       FROM producto p
+      WHERE p.id_producto IN (:ids)`,
+    { replacements: { ids }, type: QueryTypes.SELECT, transaction },
+  )
+
+  const sobrantes = candidatos.filter((p) => productoCreadoParaLaRecepcion(p, fechaRegistro))
+  for (const producto of sobrantes) {
+    await Producto.update({ activo: false }, { where: { idProducto: producto.idProducto }, transaction })
+    await registrarEnBitacora({
+      entidad: 'producto',
+      idRegistro: producto.idProducto,
+      accion: 'BAJA',
+      antes: { activo: true, denominacion: producto.denominacion },
+      despues: { activo: false },
+      detalle: `${producto.denominacion} · creado para una recepción y ${motivo}`,
+    }, transaction)
+  }
+
+  return sobrantes.map((p) => ({ idProducto: p.idProducto, denominacion: p.denominacion }))
 }
 
 export const listarProveedoresActivos = async () => {

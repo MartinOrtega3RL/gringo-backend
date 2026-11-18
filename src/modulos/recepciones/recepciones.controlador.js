@@ -108,8 +108,7 @@ export const confirmar = async (peticion, respuesta) =>
   })
 
 export const eliminar = async (peticion, respuesta) => {
-  await eliminarRecepcion(id.parse(peticion.params.id))
-  respuesta.status(204).end()
+  respuesta.json({ datos: await eliminarRecepcion(id.parse(peticion.params.id)) })
 }
 
 export const proveedores = async (_peticion, respuesta) =>

@@ -9,16 +9,19 @@ import {
 const opcional = (esquema) => esquema.nullish().transform((valor) => valor || null)
 
 const esquemaCliente = z.object({
-  apellidoNombre: z.string().trim().min(2, 'El nombre necesita al menos dos caracteres.').max(150),
+  apellidoNombre: z.string().trim().min(2, 'El nombre necesita al menos dos caracteres.').max(150, 'El nombre es demasiado largo (máximo 150 caracteres).'),
   tipoPersona: z.enum(['FISICA', 'JURIDICA']).default('FISICA'),
   tipoDocumento: opcional(z.enum(['DNI', 'CUIT', 'CUIL', 'PASAPORTE', 'OTRO'])),
-  numeroDocumento: opcional(z.string().trim().max(20)),
+  numeroDocumento: opcional(z.string().trim().max(20, 'El número de documento es demasiado largo (máximo 20 caracteres).')),
   // H11: el WhatsApp es el dato de contacto que piden siempre.
-  telefonoWhatsapp: opcional(z.string().trim().max(30)),
-  correo: opcional(z.string().trim().email('El correo no tiene un formato valido.').max(120)),
-  domicilio: opcional(z.string().trim().max(200)),
+  telefonoWhatsapp: opcional(z.string().trim()
+    .max(30, 'El WhatsApp es demasiado largo (máximo 30 caracteres).')
+    .regex(/^[\d\s+()\-.]*$/, 'El WhatsApp solo puede llevar números, espacios, +, guiones y paréntesis.')
+    .refine((v) => !v || v.replace(/\D/g, '').length >= 6, 'El WhatsApp tiene que tener al menos 6 números.')),
+  correo: opcional(z.string().trim().email('El correo no tiene un formato válido.').max(120, 'El correo es demasiado largo (máximo 120 caracteres).')),
+  domicilio: opcional(z.string().trim().max(200, 'El domicilio es demasiado largo (máximo 200 caracteres).')),
   idTipoCliente: z.coerce.number().int().positive(),
-  observaciones: opcional(z.string().trim().max(300)),
+  observaciones: opcional(z.string().trim().max(300, 'Las observaciones son demasiado largas (máximo 300 caracteres).')),
 })
 
 const esquemaId = z.coerce.number().int().positive()

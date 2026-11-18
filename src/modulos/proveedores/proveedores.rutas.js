@@ -14,16 +14,19 @@ import {
 const opcional = (esquema) => esquema.nullish().transform((v) => v || null)
 
 const esquemaProveedor = z.object({
-  apellidoNombre: z.string().trim().min(2, 'Cargá el nombre del proveedor.').max(150),
+  apellidoNombre: z.string().trim().min(2, 'Cargá el nombre del proveedor.').max(150, 'El nombre es demasiado largo (máximo 150 caracteres).'),
   tipoPersona: z.enum(['FISICA', 'JURIDICA']).default('JURIDICA'),
   tipoDocumento: opcional(z.enum(['DNI', 'CUIT', 'CUIL', 'PASAPORTE', 'OTRO'])),
-  numeroDocumento: opcional(z.string().trim().max(20)),
-  telefonoWhatsapp: opcional(z.string().trim().max(30)),
-  correo: opcional(z.string().trim().email('El correo no tiene un formato válido.').max(120)),
-  domicilio: opcional(z.string().trim().max(200)),
+  numeroDocumento: opcional(z.string().trim().max(20, 'El número de documento es demasiado largo (máximo 20 caracteres).')),
+  telefonoWhatsapp: opcional(z.string().trim()
+    .max(30, 'El WhatsApp es demasiado largo (máximo 30 caracteres).')
+    .regex(/^[\d\s+()\-.]*$/, 'El WhatsApp solo puede llevar números, espacios, +, guiones y paréntesis.')
+    .refine((v) => !v || v.replace(/\D/g, '').length >= 6, 'El WhatsApp tiene que tener al menos 6 números.')),
+  correo: opcional(z.string().trim().email('El correo no tiene un formato válido.').max(120, 'El correo es demasiado largo (máximo 120 caracteres).')),
+  domicilio: opcional(z.string().trim().max(200, 'El domicilio es demasiado largo (máximo 200 caracteres).')),
   // H14: algunos pedidos se cursan por la web del proveedor.
-  sitioWeb: opcional(z.string().trim().max(200)),
-  observaciones: opcional(z.string().trim().max(300)),
+  sitioWeb: opcional(z.string().trim().max(200, 'La dirección del sitio web es demasiado larga (máximo 200 caracteres).')),
+  observaciones: opcional(z.string().trim().max(300, 'Las observaciones son demasiado largas (máximo 300 caracteres).')),
 })
 
 const esquemaId = z.coerce.number().int().positive()

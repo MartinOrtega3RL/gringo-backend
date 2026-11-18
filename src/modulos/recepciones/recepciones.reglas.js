@@ -236,6 +236,60 @@ export const calcularTotalRecepcion = (lineas = []) => {
   return totalCentavos / 100
 }
 
+// Importes impresos al pie del comprobante. Cada etiqueta ocupa su renglon: no se
+// confunde con una linea de articulo, y el porcentaje de "IVA (21%)" no se toma
+// por el importe.
+const RX_PIE = {
+  subtotal: new RegExp(`^sub\\s*-?\\s*total\\s*:?\\s*\\$?\\s*(${MONTO})$`, 'i'),
+  descuento: new RegExp(`^(?:descuentos?|bonificaci[oó]n)\\s*:?\\s*-?\\s*\\$?\\s*(${MONTO})$`, 'i'),
+  iva: new RegExp(`^iva(?:\\s*\\(?\\s*\\d+(?:[.,]\\d+)?\\s*%\\s*\\)?)?\\s*:?\\s*\\$?\\s*(${MONTO})$`, 'i'),
+  total: new RegExp(`^total(?:\\s+general|\\s+a\\s+pagar)?\\s*:?\\s*\\$?\\s*(${MONTO})$`, 'i'),
+}
+
+/**
+ * RF10.2 — lee del texto del comprobante los importes que figuran al pie:
+ * subtotal, descuento, IVA y total. La suma de las lineas no es el total de la
+ * factura, que ademas lleva descuentos e impuestos; sirve para contrastar una
+ * contra la otra. Lo que no se encuentra queda en null; si no se encuentra nada,
+ * devuelve null. El IVA de varias alicuotas se suma.
+ */
+export const extraerTotalesComprobante = (texto) => {
+  if (!texto || typeof texto !== 'string') return null
+
+  const totales = { subtotal: null, descuento: null, iva: null, total: null }
+  for (const cruda of texto.split(/\r?\n/)) {
+    // Ruido que el OCR deja antes de la etiqueta: simbolos o un par de letras con parentesis ("m) TOTAL")
+    const linea = normalizarLineaOcr(cruda).replace(/^(?:[^\p{L}\d]+|\p{L}{1,2}\)\s*)+/u, '')
+    for (const clave of Object.keys(RX_PIE)) {
+      const m = linea.match(RX_PIE[clave])
+      const importe = m ? parsearNumeroAr(m[1]) : null
+      if (importe === null) continue
+      totales[clave] = clave === 'iva' && totales.iva !== null ? redondear2(totales.iva + importe) : importe
+    }
+  }
+
+  return Object.values(totales).some((v) => v !== null) ? totales : null
+}
+
+/**
+ * RF10.3 — un producto dado de alta durante la validacion de una recepcion existe
+ * solo para ella. Si la recepcion se elimina y el producto no tiene historia, no
+ * hay motivo para que siga en el catalogo y en el mostrador con stock cero.
+ * Es "de la recepcion" si se creo despues de registrarla, esta activo, sin
+ * existencias y sin ningun uso: movimientos, ventas, pedidos, repuestos ni otras
+ * recepciones. Un producto que ya estaba en el catalogo se conserva siempre.
+ */
+export const productoCreadoParaLaRecepcion = (producto, fechaRegistroRecepcion) => {
+  if (!producto?.activo || Number(producto.stockActual) !== 0) return false
+
+  const creado = new Date(producto.creadoEn)
+  const registrada = new Date(fechaRegistroRecepcion)
+  if (Number.isNaN(creado.getTime()) || Number.isNaN(registrada.getTime()) || creado < registrada) return false
+
+  return ['movimientos', 'ventas', 'pedidos', 'repuestos', 'otrasRecepciones']
+    .every((uso) => Number(producto[uso] ?? 0) === 0)
+}
+
 /**
  * Extrae palabras significativas para buscar sugerencias sobre el indice FULLTEXT
  * del catalogo en modo booleano sin exigir coincidencia estricta de cada token.
