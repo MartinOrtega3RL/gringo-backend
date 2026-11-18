@@ -4,10 +4,10 @@ import { escapar, fechaLegible } from '../../http/html.js'
 // la impresora que tiene el comercio. Es la hoja que el cliente se lleva y la
 // que tiene que exhibir para retirar el equipo (H09).
 //
-// Las condiciones que figuran abajo son las tres que el comercio ya tiene
-// escritas en su ficha de papel (H07, H08 y H09). No se agregan clausulas: lo
-// que no esta relevado no se inventa en un documento que el cliente firma. Los
-// plazos y el porcentaje no estan en esta plantilla: llegan de
+// Las condiciones que figuran abajo son las de la ficha de papel del comercio
+// (Anexo II: H07, H08, H09 y H26), en el mismo orden. No se agregan clausulas:
+// lo que no esta en la ficha no se inventa en un documento que el cliente
+// firma. Los plazos y el porcentaje no estan en esta plantilla: llegan de
 // parametro_sistema con la orden, asi que si el comercio los cambia, la hoja
 // cambia con ellos.
 //
@@ -46,7 +46,7 @@ const ESTILO = `
     .filete i:first-child { height: 1.1mm; background: #e4322b; }
     .filete i:last-child { height: 0.4mm; background: #f0b429; margin-top: 0.5mm; }
 
-    h2 { margin: 5mm 0 2mm; font-size: 7.5pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.16em; color: #55554f; border-bottom: 0.5pt solid #17181a; padding-bottom: 1mm; }
+    h2 { margin: 4mm 0 2mm; font-size: 7.5pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.16em; color: #55554f; border-bottom: 0.5pt solid #17181a; padding-bottom: 1mm; }
     dl { display: flex; flex-wrap: wrap; gap: 2.5mm 9mm; margin: 0; font-size: 10pt; }
     dl div { min-width: 40mm; }
     dt { font-size: 7pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.14em; color: #55554f; }
@@ -58,12 +58,13 @@ const ESTILO = `
     .marcado { display: inline-block; border: 1.5pt solid #17181a; padding: 0.4mm 2mm; font-weight: 700; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.08em; }
     .marcado.alerta { border-color: #b3211c; color: #b3211c; }
 
-    .condiciones { margin: 0; padding: 0; list-style: none; font-size: 9.5pt; }
-    .condiciones li { padding: 1.6mm 0; border-bottom: 0.3pt solid #c9c7bf; }
-    .condiciones li:last-child { border-bottom: none; }
+    /* Las ocho condiciones de la ficha van en dos columnas: en una sola, la
+       orden no entra en una hoja A4. */
+    .condiciones { margin: 0; padding: 0; list-style: none; font-size: 8.5pt; line-height: 1.3; columns: 2; column-gap: 8mm; }
+    .condiciones li { padding: 1.1mm 0; border-bottom: 0.3pt solid #c9c7bf; break-inside: avoid; }
     .condiciones strong { font-weight: 700; }
 
-    .firmas { display: grid; grid-template-columns: 1fr 1fr; gap: 14mm; margin-top: 16mm; }
+    .firmas { display: grid; grid-template-columns: 1fr 1fr; gap: 14mm; margin-top: 14mm; }
     .firmas div { border-top: 0.8pt solid #17181a; padding-top: 1.5mm; font-size: 8pt; text-transform: uppercase; letter-spacing: 0.12em; color: #55554f; }
 
     .pie { margin-top: 6mm; font-size: 8pt; color: #55554f; display: flex; justify-content: space-between; gap: 6mm; }
@@ -141,9 +142,14 @@ const plantilla = (orden) => {
 
     <h2>Condiciones</h2>
     <ul class="condiciones">
-      <li><strong>Garantía:</strong> ${garantiaDias} días corridos desde la entrega, sobre lo reparado. Se anula si los sellos o precintos colocados por el comercio se presentan rasgados o cortados.</li>
-      <li><strong>Retiro:</strong> el equipo debe retirarse dentro de los ${plazoRetiroDias} días de notificado. Pasado ese plazo se aplica un recargo del ${recargoPct}% sobre el monto de la reparación.</li>
-      <li><strong>Para retirar el equipo es obligatorio exhibir esta orden.</strong></li>
+      <li>El cliente autoriza el diagnóstico y el desarme del equipo.</li>
+      <li>Toda reparación será presupuestada y deberá ser autorizada antes de su realización.</li>
+      <li>El cliente es responsable de realizar una copia de seguridad de sus datos. El servicio técnico no responde por la pérdida de información.</li>
+      <li>En equipos con golpes, humedad, reparaciones previas o fallas electrónicas pueden detectarse daños adicionales durante el diagnóstico.</li>
+      <li><strong>Garantía:</strong> ${garantiaDias} días corridos desde la entrega, únicamente sobre la reparación realizada o el repuesto instalado. No cubre golpes, caídas, humedad, manipulación por terceros, uso indebido, roturas posteriores, daños eléctricos, software ni fallas distintas a la reparación efectuada.</li>
+      <li>La garantía queda sin efecto si el equipo es abierto o intervenido por terceros, o si los sellos o precintos colocados por el comercio se presentan rasgados o cortados.</li>
+      <li><strong>Retiro:</strong> el equipo deberá retirarse dentro de los ${plazoRetiroDias} días de haber sido notificado. Pasado ese plazo se agrega un ${recargoPct}% al monto de la reparación.</li>
+      <li><strong>La exhibición de esta orden es condición necesaria para el retiro del equipo.</strong></li>
     </ul>
 
     <div class="firmas">

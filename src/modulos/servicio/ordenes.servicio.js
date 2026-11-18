@@ -11,7 +11,7 @@ import { NoEncontrado, DatosInvalidos } from '../../errores.js'
 import { registroDe } from '../../registro.js'
 import {
   formatearNumeroOrden, operacionesDisponibles, cambiosManuales, puedeDarseComoReparada,
-  estaNoRetirada, limiteNoRetirada, diasCalendario, liquidar, vencimientoGarantia, evaluarGarantia,
+  estaNoRetirada, limiteNoRetirada, diasCalendario, liquidar, vencimientoGarantia, evaluarGarantia, leerDesbloqueo,
 } from './servicio.reglas.js'
 import { inicioDeDia, finDeDia } from '../../http/fechas.js'
 import {
@@ -85,7 +85,7 @@ const RELACIONES_DETALLE = [
  * reglas, y no en la interfaz: asi hay un solo lugar que decide.
  */
 const presentar = async (orden, permisos, hoy) => {
-  const plano = orden.get({ plain: true })
+  const { codigoDesbloqueo, ...plano } = orden.get({ plain: true })
   const codigo = plano.estado.codigo
   const { garantiaDias, plazoRetiroDias, recargoPct } = await reglasDeNegocio()
   const estados = await estadosPorCodigo()
@@ -100,12 +100,25 @@ const presentar = async (orden, permisos, hoy) => {
   // ficha tiene que mostrar lo que se va acumulando: se cobraria salvo que se
   // haya descartado (el cliente rechazo, no tiene arreglo, se anulo).
   const definitiva = Boolean(plano.fechaEntrega)
+
+  // RF24.3 — si es un reingreso: la garantia de la orden anterior, tal como
+  // estaba el dia que el equipo volvio y con los sellos con que volvio. Si
+  // estaba vigente, la reparacion no se cobra.
+  const garantiaAlIngresar = plano.ordenAnterior
+    ? evaluarGarantia(plano.ordenAnterior, plano.estadoSellos, new Date(plano.fechaIngreso))
+    : null
+  const cubiertaPorGarantia = Boolean(garantiaAlIngresar?.vigente)
+
+  const centavosPresupuesto = aCentavos(plano.montoPresupuestado ?? 0)
+  const centavosRepuestos = plano.repuestos.reduce((suma, r) => suma + aCentavos(r.precioUnitario) * r.cantidad, 0)
+
   const descartada = plano.historial.some((paso) => ['RECHAZADO', 'NO_REPARABLE', 'ANULADA'].includes(paso.estado.codigo))
   const seCobraria = huboReparacion || !descartada
 
   const calculada = definitiva
     ? {
         reparacion: aCentavos(plano.montoTotal) - aCentavos(plano.recargoAplicado),
+        bonificacion: cubiertaPorGarantia && huboReparacion ? centavosPresupuesto + centavosRepuestos : 0,
         recargo: aCentavos(plano.recargoAplicado),
         total: aCentavos(plano.montoTotal),
       }
@@ -115,10 +128,8 @@ const presentar = async (orden, permisos, hoy) => {
         huboReparacion: seCobraria,
         noRetirada,
         porcentajeRecargo: recargoPct,
+        cubiertaPorGarantia,
       })
-
-  const centavosPresupuesto = aCentavos(plano.montoPresupuestado ?? 0)
-  const centavosRepuestos = plano.repuestos.reduce((suma, r) => suma + aCentavos(r.precioUnitario) * r.cantidad, 0)
 
   const conCosto = puedeVerCosto(permisos)
   const repuestos = plano.repuestos.map(({ costoUnitario, ...resto }) => ({
@@ -130,6 +141,9 @@ const presentar = async (orden, permisos, hoy) => {
 
   return {
     ...plano,
+    // RF21.10 — solo llega a quien abre la ficha, que es quien tiene el modulo
+    // de servicio tecnico. El listado no lo trae.
+    desbloqueo: leerDesbloqueo(codigoDesbloqueo),
     repuestos,
     operaciones: operacionesDisponibles(codigo),
     cambios: cambiosManuales(codigo).map((destino) => ({
@@ -140,6 +154,7 @@ const presentar = async (orden, permisos, hoy) => {
       presupuesto: aPesos(centavosPresupuesto),
       repuestos: aPesos(centavosRepuestos),
       reparacion: aPesos(calculada.reparacion),
+      bonificacion: aPesos(calculada.bonificacion),
       recargo: aPesos(calculada.recargo),
       total: aPesos(calculada.total),
       definitiva,
@@ -148,11 +163,7 @@ const presentar = async (orden, permisos, hoy) => {
     diasDesdeNotificacion: plano.fechaNotificacion && !plano.fechaEntrega
       ? diasCalendario(new Date(plano.fechaNotificacion), hoy)
       : null,
-    // RF24.3 — si es un reingreso: la garantia de la orden anterior, tal como
-    // estaba el dia que el equipo volvio y con los sellos con que volvio.
-    garantiaAlIngresar: plano.ordenAnterior
-      ? evaluarGarantia(plano.ordenAnterior, plano.estadoSellos, new Date(plano.fechaIngreso))
-      : null,
+    garantiaAlIngresar,
     // RF24.2 — la garantia de ESTA reparacion, una vez entregada.
     garantiaPropia: plano.fechaVencGarantia
       ? evaluarGarantia({ fechaVencGarantia: plano.fechaVencGarantia }, 'INTACTOS', hoy)
@@ -209,6 +220,7 @@ export const listarOrdenes = async ({ texto, estado, idCliente, desde, hasta, so
 
   const resultado = await OrdenServicio.findAndCountAll({
     where: donde,
+    attributes: { exclude: ['codigoDesbloqueo'] },
     include: [
       { model: EstadoOrden, as: 'estado', ...(estado ? { where: { codigo: estado } } : {}) },
       {
@@ -372,6 +384,7 @@ export const recepcionar = async (datos, idUsuario) => {
       estadoIngreso: datos.estadoIngreso,
       accesoriosRecibidos: datos.accesoriosRecibidos ?? null,
       estadoSellos: datos.estadoSellos,
+      codigoDesbloqueo: datos.desbloqueo,
     }, { transaction })
 
     await orden.update({ numeroOrden: formatearNumeroOrden(orden.idOrden) }, { transaction })
@@ -432,14 +445,16 @@ export const presupuestar = (idOrden, { monto }, idUsuario) =>
     }
 
     const importe = aPesos(aCentavos(monto))
+    // Para leerlo en el historial: $25.000,00 y no $25000.00.
+    const legible = Number(importe).toLocaleString('es-AR', { minimumFractionDigits: 2 })
 
     if (estado.codigo === 'PRESUPUESTADO') {
       await orden.update({ montoPresupuestado: importe }, { transaction })
-      await anotar(orden.idOrden, estado.idEstado, { idUsuario, observacion: `Presupuesto corregido a $${importe}` }, transaction)
+      await anotar(orden.idOrden, estado.idEstado, { idUsuario, observacion: `Presupuesto corregido a $${legible}` }, transaction)
     } else {
       await pasarA(orden, estado, 'PRESUPUESTADO', {
         idUsuario,
-        observacion: `Presupuesto de $${importe}`,
+        observacion: `Presupuesto de $${legible}`,
         cambios: { montoPresupuestado: importe, presupuestoAprobado: null, fechaRespuestaPresupuesto: null },
       }, transaction)
     }
@@ -549,6 +564,9 @@ export const entregar = (idOrden, { conformidad, observacion }, idUsuario) =>
       transaction,
     })
     const repuestos = await RepuestoUtilizado.findAll({ where: { idOrden }, transaction })
+    const previa = orden.idOrdenAnterior
+      ? await OrdenServicio.findByPk(orden.idOrdenAnterior, { attributes: ['fechaVencGarantia'], transaction })
+      : null
 
     // Solo hay garantia y solo hay reparacion que cobrar si el equipo se arreglo.
     const huboReparacion = historial.some((paso) => paso.estado.codigo === 'REPARADO')
@@ -559,6 +577,9 @@ export const entregar = (idOrden, { conformidad, observacion }, idUsuario) =>
       huboReparacion,
       noRetirada: estaNoRetirada({ fechaNotificacion: orden.fechaNotificacion, fechaEntrega: null }, ahora, plazoRetiroDias),
       porcentajeRecargo: recargoPct,
+      // H07 / S14 — el reingreso con la garantia vigente al volver no se cobra.
+      cubiertaPorGarantia: Boolean(previa)
+        && evaluarGarantia(previa, orden.estadoSellos, new Date(orden.fechaIngreso)).vigente,
     })
 
     await pasarA(orden, estado, 'ENTREGADO', {

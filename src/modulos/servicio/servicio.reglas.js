@@ -74,6 +74,51 @@ export const puedeDarseComoReparada = ({ cantidadTareas }) =>
     ? { admite: true }
     : { admite: false, motivo: 'Registrá las tareas realizadas antes de dar la orden por reparada: son las que cubre la garantía.' }
 
+// --- Desbloqueo del equipo (RF21.10) ----------------------------------------------
+
+// La ficha de papel lo pide como opcional: sin el codigo, el tecnico no puede
+// probar el equipo. El PIN admite letras porque muchos equipos usan contrasena.
+// El patron son los puntos de la grilla de 3 x 3, numerados de 1 a 9 de
+// izquierda a derecha y de arriba abajo, en el orden en que se unen.
+const PIN_VALIDO = /^[A-Za-z0-9]{4,16}$/
+
+/**
+ * Valida lo que se cargo en la recepcion y lo deja como se guarda.
+ * @param {null | {tipo: 'PIN'|'PATRON', valor: string|number[]}} desbloqueo
+ * @returns {{valido: true, codigo: string|null} | {valido: false, motivo: string}}
+ */
+export const codificarDesbloqueo = (desbloqueo) => {
+  if (!desbloqueo) return { valido: true, codigo: null }
+
+  if (desbloqueo.tipo === 'PIN') {
+    const pin = String(desbloqueo.valor ?? '').trim()
+    return PIN_VALIDO.test(pin)
+      ? { valido: true, codigo: `PIN:${pin}` }
+      : { valido: false, motivo: 'El PIN o la contraseña tiene entre 4 y 16 letras o números, sin espacios.' }
+  }
+
+  if (desbloqueo.tipo === 'PATRON') {
+    const puntos = Array.isArray(desbloqueo.valor) ? desbloqueo.valor : []
+    const valido = puntos.length >= 4 && puntos.length <= 9
+      && puntos.every((punto) => Number.isInteger(punto) && punto >= 1 && punto <= 9)
+      && new Set(puntos).size === puntos.length
+    return valido
+      ? { valido: true, codigo: `PATRON:${puntos.join('-')}` }
+      : { valido: false, motivo: 'El patrón une entre 4 y 9 puntos distintos de la grilla.' }
+  }
+
+  return { valido: false, motivo: 'Indicá si el equipo se desbloquea con PIN o con patrón.' }
+}
+
+/** Lo guardado, de vuelta a como lo muestra la ficha. */
+export const leerDesbloqueo = (codigo) => {
+  if (!codigo) return null
+  const [tipo, valor = ''] = codigo.split(':')
+  return tipo === 'PATRON'
+    ? { tipo, valor: valor.split('-').map(Number) }
+    : { tipo: 'PIN', valor }
+}
+
 // --- Fechas --------------------------------------------------------------------
 
 const inicioDelDia = (fecha) => new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate())
@@ -127,21 +172,30 @@ export const limiteNoRetirada = (hoy, plazoDias) => {
  * antes del recargo. Si el equipo no se reparo (rechazo el presupuesto o no
  * tenia arreglo) no hay reparacion que cobrar ni sobre que recargar.
  *
+ * Un reingreso con la garantia vigente (H07) no se cobra: la reparacion se
+ * bonifica entera. El recargo por demora es otra cosa (H08): corre igual si
+ * el equipo no se retira a tiempo, sobre el valor de la reparacion.
+ *
  * @param {object} orden
  * @param {number|string|null} orden.montoPresupuestado
  * @param {{cantidad:number, precioUnitario:number|string}[]} orden.repuestos
  * @param {boolean} orden.huboReparacion
  * @param {boolean} orden.noRetirada
  * @param {number|string} orden.porcentajeRecargo  15 para el quince por ciento
+ * @param {boolean} [orden.cubiertaPorGarantia]  reingreso con garantia vigente
  */
-export const liquidar = ({ montoPresupuestado, repuestos = [], huboReparacion, noRetirada, porcentajeRecargo }) => {
+export const liquidar = ({
+  montoPresupuestado, repuestos = [], huboReparacion, noRetirada, porcentajeRecargo, cubiertaPorGarantia = false,
+}) => {
   const presupuesto = aCentavos(montoPresupuestado ?? 0)
   const piezas = repuestos.reduce((suma, r) => suma + aCentavos(r.precioUnitario) * r.cantidad, 0)
 
-  const reparacion = huboReparacion ? presupuesto + piezas : 0
-  const recargo = noRetirada ? Math.round((reparacion * Number(porcentajeRecargo)) / 100) : 0
+  const valor = huboReparacion ? presupuesto + piezas : 0
+  const bonificacion = cubiertaPorGarantia ? valor : 0
+  const reparacion = valor - bonificacion
+  const recargo = noRetirada ? Math.round((valor * Number(porcentajeRecargo)) / 100) : 0
 
-  return { reparacion, recargo, total: reparacion + recargo }
+  return { reparacion, bonificacion, recargo, total: reparacion + recargo }
 }
 
 // --- Garantia (H07) ------------------------------------------------------------

@@ -50,6 +50,8 @@ export const OrdenServicio = sequelize.define('OrdenServicio', {
     defaultValue: 'SIN_SELLO',
     field: 'estado_sellos',
   },
+  // RF21.10 — "PIN:<codigo>" o "PATRON:1-5-9-6". Se borra al cerrar la orden.
+  codigoDesbloqueo: { type: DataTypes.STRING(30), allowNull: true, field: 'codigo_desbloqueo' },
 
   diagnosticoTecnico: { type: DataTypes.TEXT, allowNull: true, field: 'diagnostico_tecnico' },
   montoPresupuestado: { type: DataTypes.DECIMAL(12, 2), allowNull: true, field: 'monto_presupuestado' },

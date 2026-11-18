@@ -75,7 +75,11 @@ export const pasarA = async (orden, estadoActual, codigoDestino, contexto, trans
 
   const destino = await estadoPorCodigo(codigoDestino)
 
-  await orden.update({ ...cambios, idEstadoActual: destino.idEstado }, { transaction })
+  // RF21.10 — el codigo de desbloqueo sirve mientras el equipo esta en
+  // el taller. Al cerrar la orden (entregada o anulada) se borra.
+  const borrarDesbloqueo = destino.esFinal ? { codigoDesbloqueo: null } : {}
+
+  await orden.update({ ...cambios, ...borrarDesbloqueo, idEstadoActual: destino.idEstado }, { transaction })
   await anotar(orden.idOrden, destino.idEstado, { idUsuario, observacion, medio }, transaction)
 
   await registrarEnBitacora({

@@ -33,6 +33,7 @@ export const consultarDispositivo = async ({ imei, sellos = 'SIN_SELLO' }, hoy =
 
   const ordenes = await OrdenServicio.findAll({
     where: { idDispositivo: dispositivo.idDispositivo },
+    attributes: { exclude: ['codigoDesbloqueo'] },
     include: [
       { model: EstadoOrden, as: 'estado' },
       {

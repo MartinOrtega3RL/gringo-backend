@@ -10,6 +10,7 @@ import {
 import { registrarRepuesto, quitarRepuesto, registrarTarea, registrarFoto, rutaDeFoto } from './reparacion.servicio.js'
 import { consultarDispositivo } from './dispositivos.servicio.js'
 import { generarDocumentoOrden } from './orden.html.js'
+import { codificarDesbloqueo } from './servicio.reglas.js'
 
 // En ninguna de estas operaciones viaja el id del usuario: el responsable de
 // cada paso sale del token. Si se aceptara del cuerpo, cualquiera podria cargar
@@ -50,6 +51,17 @@ const esquemaRecepcion = z.object({
   estadoIngreso: z.string().trim().min(3, 'Describí cómo llega el equipo: golpes, rayones, si enciende.').max(2000),
   accesoriosRecibidos: opcional(300),
   estadoSellos: z.enum(['INTACTOS', 'VIOLADOS', 'SIN_SELLO']).default('SIN_SELLO'),
+  // RF21.10 — opcional, como en la ficha de papel. Llega como { tipo, valor } y
+  // sale ya como se guarda ("PIN:..." o "PATRON:...").
+  desbloqueo: z.object({
+    tipo: z.enum(['PIN', 'PATRON'], { message: 'Indicá si el equipo se desbloquea con PIN o con patrón.' }),
+    valor: z.union([z.string(), z.array(z.number())]),
+  }).nullish().transform((valor, contexto) => {
+    const resultado = codificarDesbloqueo(valor ?? null)
+    if (resultado.valido) return resultado.codigo
+    contexto.addIssue({ code: 'custom', message: resultado.motivo })
+    return z.NEVER
+  }),
   idOrdenAnterior: id.nullish().transform((valor) => valor ?? null),
 })
 
